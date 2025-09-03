@@ -1283,6 +1283,24 @@ extern "C" {
     //
     LLAMA_API struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * vocab);
 
+    LLAMA_API struct llama_sampler * llama_sampler_init_deepconf(
+        float confidence_threshold,
+        size_t top_k,
+        bool enable_early_termination,
+        float entropy_weight,
+        float top_k_weight
+    );
+
+    // Get DeepConf sampler statistics
+    LLAMA_API bool llama_sampler_deepconf_get_stats(
+        const struct llama_sampler * smpl,
+        float * avg_confidence,
+        float * min_confidence,
+        float * max_confidence,
+        size_t * trace_length,
+        size_t * early_terminations
+    );
+
     // Returns the seed used by the sampler if applicable, LLAMA_DEFAULT_SEED otherwise
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);
 
@@ -1347,11 +1365,13 @@ extern "C" {
 
     LLAMA_API struct llama_perf_context_data llama_perf_context      (const struct llama_context * ctx);
     LLAMA_API void                           llama_perf_context_print(const struct llama_context * ctx);
+    LLAMA_API void                           llama_perf_context_print_to_file(const struct llama_context * ctx, const char * filename);
     LLAMA_API void                           llama_perf_context_reset(      struct llama_context * ctx);
 
     // NOTE: the following work only with samplers constructed via llama_sampler_chain_init
     LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
+    LLAMA_API void                           llama_perf_sampler_print_to_file(const struct llama_sampler * chain, const char * filename);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
 
     //

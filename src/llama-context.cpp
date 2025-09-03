@@ -2755,6 +2755,32 @@ void llama_perf_context_print(const llama_context * ctx) {
     LLAMA_LOG_INFO("%s:    graphs reused = %10d\n", __func__, data.n_reused);
 }
 
+void llama_perf_context_print_to_file(const llama_context * ctx, const char * filename) {
+    if (!filename || !filename[0]) {
+        return;
+    }
+
+    const auto data = llama_perf_context(ctx);
+
+    const double t_end_ms = 1e-3 * ggml_time_us();
+
+    FILE * fp = fopen(filename, "a");
+    if (!fp) {
+        LLAMA_LOG_ERROR("%s: failed to open file '%s' for writing\n", __func__, filename);
+        return;
+    }
+
+    fprintf(fp, "%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
+    fprintf(fp, "%s: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
+            __func__, data.t_p_eval_ms, data.n_p_eval, data.t_p_eval_ms / data.n_p_eval, 1e3 / data.t_p_eval_ms * data.n_p_eval);
+    fprintf(fp, "%s:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
+            __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
+    fprintf(fp, "%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
+    fprintf(fp, "%s:    graphs reused = %10d\n", __func__, data.n_reused);
+
+    fclose(fp);
+}
+
 void llama_perf_context_reset(llama_context * ctx) {
     ctx->perf_reset();
 }

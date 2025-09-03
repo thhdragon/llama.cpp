@@ -179,6 +179,11 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # llama_build_and_test(test-double-float.cpp) # SLOW
 endif()
 
+# Force build test-sampling on Windows for DeepConf testing
+if (WIN32 AND BUILD_SHARED_LIBS)
+    llama_build_and_test(test-sampling.cpp)
+endif()
+
 llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)

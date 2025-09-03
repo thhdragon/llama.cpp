@@ -71,7 +71,6 @@ static void sigint_handler(int signo) {
         } else {
             console::cleanup();
             LOG("\n");
-            common_perf_print(*g_ctx, *g_smpl);
 
             // make sure all logs are flushed
             LOG("Interrupted by user\n");
@@ -979,6 +978,9 @@ int main(int argc, char ** argv) {
     }
 
     LOG("\n\n");
+    if (!params.perf_log_file.empty()) {
+        common_perf_print_to_file(ctx, smpl, params.perf_log_file.c_str());
+    }
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);

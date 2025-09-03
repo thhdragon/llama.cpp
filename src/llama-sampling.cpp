@@ -2612,6 +2612,203 @@ struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * voca
     );
 }
 
+// deepconf
+
+struct llama_sampler_deepconf {
+    const float confidence_threshold;
+    const size_t top_k;
+    const bool enable_early_termination;
+    const float entropy_weight;
+    const float top_k_weight;
+
+    // State tracking for trace-based confidence
+    std::vector<float> trace_confidences;
+    std::vector<llama_token> current_trace;
+    size_t current_trace_length;
+};
+
+static float calculate_entropy(const llama_token_data_array * cur_p) {
+    float entropy = 0.0f;
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        if (cur_p->data[i].p > 0.0f) {
+            entropy += -cur_p->data[i].p * logf(cur_p->data[i].p);
+        }
+    }
+    return entropy;
+}
+
+static float calculate_top_k_confidence(const llama_token_data_array * cur_p, size_t k) {
+    // Sort by logit descending
+    std::vector<float> logits;
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        logits.push_back(cur_p->data[i].logit);
+    }
+    std::partial_sort(logits.begin(), logits.begin() + std::min(k, logits.size()), 
+                     logits.end(), std::greater<float>());
+    
+    float sum = 0.0f;
+    size_t count = std::min(k, logits.size());
+    for (size_t i = 0; i < count; ++i) {
+        sum += logits[i];
+    }
+    return count > 0 ? sum / count : 0.0f;
+}
+
+static const char * llama_sampler_deepconf_name(const struct llama_sampler * /*smpl*/) {
+    return "deepconf";
+}
+
+static void llama_sampler_deepconf_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_deepconf *) smpl->ctx;
+    
+    // Apply softmax to get probabilities
+    llama_sampler_softmax_impl(cur_p, true);
+    
+    // Calculate confidence metrics
+    float entropy = calculate_entropy(cur_p);
+    float top_k_conf = calculate_top_k_confidence(cur_p, ctx->top_k);
+    
+    // Combined confidence score
+    float confidence = ctx->entropy_weight * (1.0f - entropy) + 
+                      ctx->top_k_weight * top_k_conf;
+    
+    // Store for trace-based analysis
+    ctx->trace_confidences.push_back(confidence);
+    
+    // Log confidence metrics
+    LLAMA_LOG_INFO("DeepConf: entropy=%.4f, top_k_conf=%.4f, combined_conf=%.4f, threshold=%.4f, trace_len=%zu\n",
+                   entropy, top_k_conf, confidence, ctx->confidence_threshold, ctx->trace_confidences.size());
+    
+    // Early termination check
+    if (ctx->enable_early_termination && 
+        confidence < ctx->confidence_threshold) {
+        // Early termination: limit to top_k tokens
+        if (cur_p->size > ctx->top_k) {
+            LLAMA_LOG_INFO("DeepConf: Early termination triggered - limiting to top_k=%zu tokens\n", ctx->top_k);
+            cur_p->size = ctx->top_k;
+        }
+    } else if (ctx->enable_early_termination) {
+        LLAMA_LOG_INFO("DeepConf: Confidence above threshold - no early termination\n");
+    }
+    
+    // Filter tokens based on confidence criteria
+    // Implementation would filter cur_p->data based on confidence thresholds
+}
+
+static void llama_sampler_deepconf_accept(struct llama_sampler * smpl, llama_token token) {
+    auto * ctx = (llama_sampler_deepconf *) smpl->ctx;
+    ctx->current_trace.push_back(token);
+    ctx->current_trace_length++;
+}
+
+static void llama_sampler_deepconf_reset(struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_deepconf *) smpl->ctx;
+    ctx->trace_confidences.clear();
+    ctx->current_trace.clear();
+    ctx->current_trace_length = 0;
+}
+
+static struct llama_sampler * llama_sampler_deepconf_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (llama_sampler_deepconf *) smpl->ctx;
+    return llama_sampler_init_deepconf(
+        ctx->confidence_threshold,
+        ctx->top_k,
+        ctx->enable_early_termination,
+        ctx->entropy_weight,
+        ctx->top_k_weight
+    );
+}
+
+static void llama_sampler_deepconf_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_deepconf *) smpl->ctx;
+}
+
+static struct llama_sampler_i llama_sampler_deepconf_i = {
+    /* .name   = */ llama_sampler_deepconf_name,
+    /* .accept = */ llama_sampler_deepconf_accept,
+    /* .apply  = */ llama_sampler_deepconf_apply,
+    /* .reset  = */ llama_sampler_deepconf_reset,
+    /* .clone  = */ llama_sampler_deepconf_clone,
+    /* .free   = */ llama_sampler_deepconf_free,
+};
+
+struct llama_sampler * llama_sampler_init_deepconf(
+    float confidence_threshold,
+    size_t top_k,
+    bool enable_early_termination,
+    float entropy_weight,
+    float top_k_weight
+) {
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_deepconf_i,
+        /* .ctx   = */ new llama_sampler_deepconf {
+            /* .confidence_threshold    = */ confidence_threshold,
+            /* .top_k                   = */ top_k,
+            /* .enable_early_termination = */ enable_early_termination,
+            /* .entropy_weight          = */ entropy_weight,
+            /* .top_k_weight            = */ top_k_weight,
+            /* .trace_confidences       = */ {},
+            /* .current_trace           = */ {},
+            /* .current_trace_length    = */ 0,
+        }
+    );
+}
+
+// Get DeepConf sampler statistics
+bool llama_sampler_deepconf_get_stats(
+    const struct llama_sampler * smpl,
+    float * avg_confidence,
+    float * min_confidence,
+    float * max_confidence,
+    size_t * trace_length,
+    size_t * early_terminations
+) {
+    if (!smpl || smpl->iface != &llama_sampler_deepconf_i) {
+        return false;
+    }
+
+    const auto * ctx = (const llama_sampler_deepconf *) smpl->ctx;
+
+    if (ctx->trace_confidences.empty()) {
+        if (avg_confidence) *avg_confidence = 0.0f;
+        if (min_confidence) *min_confidence = 0.0f;
+        if (max_confidence) *max_confidence = 0.0f;
+        if (trace_length) *trace_length = 0;
+        if (early_terminations) *early_terminations = 0;
+        return true;
+    }
+
+    // Calculate statistics
+    float sum = 0.0f;
+    float min_val = ctx->trace_confidences[0];
+    float max_val = ctx->trace_confidences[0];
+
+    for (float conf : ctx->trace_confidences) {
+        sum += conf;
+        min_val = std::min(min_val, conf);
+        max_val = std::max(max_val, conf);
+    }
+
+    if (avg_confidence) *avg_confidence = sum / ctx->trace_confidences.size();
+    if (min_confidence) *min_confidence = min_val;
+    if (max_confidence) *max_confidence = max_val;
+    if (trace_length) *trace_length = ctx->trace_confidences.size();
+
+    // For now, we don't track early terminations separately, so we'll estimate
+    // based on confidences below threshold
+    if (early_terminations) {
+        size_t count = 0;
+        for (float conf : ctx->trace_confidences) {
+            if (conf < ctx->confidence_threshold) {
+                count++;
+            }
+        }
+        *early_terminations = count;
+    }
+
+    return true;
+}
+
 // utils
 
 uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl) {
@@ -2662,6 +2859,25 @@ void llama_perf_sampler_print(const struct llama_sampler * chain) {
 
     LLAMA_LOG_INFO("%s:    sampling time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
             __func__, data.t_sample_ms, data.n_sample, data.t_sample_ms / data.n_sample, 1e3 / data.t_sample_ms * data.n_sample);
+}
+
+void llama_perf_sampler_print_to_file(const struct llama_sampler * chain, const char * filename) {
+    if (!filename || !filename[0]) {
+        return;
+    }
+
+    const auto data = llama_perf_sampler(chain);
+
+    FILE * fp = fopen(filename, "a");
+    if (!fp) {
+        LLAMA_LOG_ERROR("%s: failed to open file '%s' for writing\n", __func__, filename);
+        return;
+    }
+
+    fprintf(fp, "%s:    sampling time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
+            __func__, data.t_sample_ms, data.n_sample, data.t_sample_ms / data.n_sample, 1e3 / data.t_sample_ms * data.n_sample);
+
+    fclose(fp);
 }
 
 void llama_perf_sampler_reset(struct llama_sampler * chain) {

@@ -106,6 +106,7 @@ enum common_sampler_type {
     COMMON_SAMPLER_TYPE_INFILL      = 9,
     COMMON_SAMPLER_TYPE_PENALTIES   = 10,
     COMMON_SAMPLER_TYPE_TOP_N_SIGMA = 11,
+    COMMON_SAMPLER_TYPE_DEEPCONF    = 12,
 };
 
 // dimensionality reduction methods, used by cvector-generator
@@ -497,6 +498,7 @@ struct common_params {
 
     // common params
     std::string out_file; // output filename for all example programs
+    std::string perf_log_file; // performance log filename
     // optional callback for model loading progress and cancellation:
     // called with a progress value between 0.0 and 1.0.
     // return false from callback to abort model loading or true to continue
